@@ -182,29 +182,31 @@
       gap: 12px;
     }
 
-    .layout {
+    .workspace {
       display: grid;
-      grid-template-columns: repeat(12, minmax(0, 1fr));
+      grid-template-columns: minmax(760px, 1fr) minmax(320px, 430px);
       gap: 20px;
+      align-items: start;
+    }
+
+    .main-column,
+    .side-column {
+      display: grid;
+      gap: 20px;
+      min-width: 0;
+    }
+
+    .side-column {
+      position: sticky;
+      top: 22px;
+      align-self: start;
+      max-height: calc(100vh - 44px);
+      overflow-y: auto;
+      padding-right: 4px;
     }
 
     .card {
       padding: 22px;
-    }
-
-    .timer-card,
-    .counter-card,
-    .pot-card {
-      grid-column: span 4;
-    }
-
-    .participants-card,
-    .result-card {
-      grid-column: span 6;
-    }
-
-    .stats-card {
-      grid-column: 1 / -1;
     }
 
     .card-head {
@@ -652,6 +654,49 @@
       color: var(--danger-strong);
     }
 
+    .settings-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: none;
+    }
+
+    .settings-modal.open {
+      display: block;
+    }
+
+    .settings-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(24, 19, 13, 0.45);
+      backdrop-filter: blur(2px);
+    }
+
+    .settings-panel {
+      position: relative;
+      width: min(960px, calc(100% - 40px));
+      max-height: calc(100vh - 40px);
+      margin: 20px auto;
+      padding: 24px;
+      overflow-y: auto;
+      border-radius: 26px;
+      border: 1px solid var(--border);
+      background: linear-gradient(145deg, rgba(255, 252, 247, 0.98), rgba(250, 244, 235, 0.98));
+      box-shadow: 0 30px 70px rgba(50, 34, 18, 0.35);
+    }
+
+    .settings-section {
+      margin-top: 18px;
+      padding: 18px;
+      border-radius: 18px;
+      border: 1px solid var(--border);
+      background: var(--surface-strong);
+    }
+
+    .settings-section h3 {
+      margin-bottom: 10px;
+    }
+
     .sr-only {
       position: absolute;
       width: 1px;
@@ -664,13 +709,15 @@
       border: 0;
     }
 
-    @media (max-width: 1080px) {
-      .timer-card,
-      .counter-card,
-      .pot-card,
-      .participants-card,
-      .result-card {
-        grid-column: span 6;
+    @media (max-width: 1280px) {
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .side-column {
+        position: static;
+        max-height: none;
+        overflow: visible;
       }
     }
 
@@ -680,12 +727,16 @@
       }
 
       .hero,
-      .layout {
+      .workspace {
         display: block;
       }
 
       .hero > * + *,
       .card + .card {
+        margin-top: 18px;
+      }
+
+      .workspace > * + * {
         margin-top: 18px;
       }
 
@@ -730,178 +781,214 @@
         </div>
         <div class="hero-actions">
           <button id="new-session-btn" class="btn btn-secondary">Nouvelle session</button>
-          <button id="reset-all-btn" class="btn btn-danger">Effacer tout (danger)</button>
+          <button id="settings-btn" class="btn btn-secondary">Reglages</button>
         </div>
       </div>
     </header>
 
-    <main class="layout">
-      <section class="card timer-card">
-        <div class="card-head">
-          <h2>Timer</h2>
-          <span class="muted">15:00 maximum</span>
-        </div>
-        <div id="timer-display" class="timer-display">15:00</div>
-        <div class="button-row">
-          <button id="start-btn" class="btn btn-primary">Demarrer</button>
-          <button id="pause-btn" class="btn btn-secondary">Pause</button>
-          <button id="resume-btn" class="btn btn-secondary">Reprendre</button>
-          <button id="stop-btn" class="btn btn-danger">Stop</button>
-        </div>
-        <p id="timer-meta" class="card-note"></p>
-      </section>
-
-      <section class="card counter-card">
-        <div class="card-head">
-          <h2>Compteur "OK"</h2>
-          <span class="shortcut">Espace = +1</span>
-        </div>
-        <div id="ok-count-display" class="ok-display">0</div>
-        <div class="button-row">
-          <button id="ok-btn" class="btn btn-accent btn-large">OK +1</button>
-          <button id="undo-btn" class="btn btn-secondary">Annuler le dernier OK</button>
-        </div>
-        <label class="toggle">
-          <input id="sound-toggle" type="checkbox">
-          <span>Son de clic actif</span>
-        </label>
-        <p class="card-note">La repetition automatique de la touche Espace est ignoree.</p>
-      </section>
-
-      <section class="card pot-card">
-        <div class="card-head">
-          <h2>Cagnote</h2>
-          <span class="muted">1 CHF par participant</span>
-        </div>
-        <div id="pot-display" class="money-display">0.00 CHF</div>
-        <dl class="stat-list">
-          <div>
-            <dt>Report precedent</dt>
-            <dd id="carry-display">0.00 CHF</dd>
+    <main class="workspace">
+      <section class="main-column">
+        <section class="card participants-card">
+          <div class="card-head">
+            <h2>Participants et paris</h2>
+            <span id="betting-status" class="muted"></span>
           </div>
-          <div>
-            <dt>Participants</dt>
-            <dd id="participant-count-display">0</dd>
-          </div>
-          <div>
-            <dt>Pari total ajoute</dt>
-            <dd id="participant-pot-display">0.00 CHF</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section class="card participants-card">
-        <div class="card-head">
-          <h2>Participants et paris</h2>
-          <span id="betting-status" class="muted"></span>
-        </div>
-        <p class="card-note">1) Enregistre ta mise. 2) Definis l'admin unique de la session. 3) L'admin lance le timer.</p>
-        <div class="enrollment-shell">
-          <form id="participant-form" class="participant-form" autocomplete="off">
-            <label>
-              <span>Ton nom</span>
-              <input id="participant-name" name="name" type="text" maxlength="40" placeholder="Ex: Theo" list="saved-participants-list" required>
-            </label>
-            <label>
-              <span>Ton pari</span>
-              <input id="participant-guess" name="guess" type="number" min="0" step="1" placeholder="0" required>
-            </label>
-            <button type="submit" class="btn btn-primary">Enregistrer ma mise</button>
-          </form>
-          <div class="admin-panel">
-            <h3>Admin de la session</h3>
-            <p class="muted">Un seul admin. Il demarre/stop le timer et compte les "OK".</p>
-            <label>
-              <span>Choisir un participant</span>
-              <select id="admin-select"></select>
-            </label>
-            <div class="button-row">
-              <button id="set-admin-btn" type="button" class="btn btn-secondary">Definir admin</button>
-              <button id="claim-admin-btn" type="button" class="btn btn-secondary">Me definir admin</button>
+          <p class="card-note">1) Enregistre ta mise. 2) Definis l'admin unique de la session. 3) L'admin lance le timer.</p>
+          <div class="enrollment-shell">
+            <form id="participant-form" class="participant-form" autocomplete="off">
+              <label>
+                <span>Ton nom</span>
+                <input id="participant-name" name="name" type="text" maxlength="40" placeholder="Ex: Theo" list="saved-participants-list" required>
+              </label>
+              <label>
+                <span>Ton pari</span>
+                <input id="participant-guess" name="guess" type="number" min="0" step="1" placeholder="0" required>
+              </label>
+              <button type="submit" class="btn btn-primary">Enregistrer ma mise</button>
+            </form>
+            <div class="admin-panel">
+              <h3>Admin de la session</h3>
+              <p class="muted">Un seul admin. Il demarre/stop le timer et compte les "OK".</p>
+              <label>
+                <span>Choisir un participant</span>
+                <select id="admin-select"></select>
+              </label>
+              <div class="button-row">
+                <button id="set-admin-btn" type="button" class="btn btn-secondary">Definir admin</button>
+                <button id="claim-admin-btn" type="button" class="btn btn-secondary">Me definir admin</button>
+              </div>
             </div>
           </div>
-        </div>
-        <form id="directory-form" class="directory-form" autocomplete="off">
-          <label>
-            <span>Creer un participant reutilisable</span>
-            <input id="directory-name" name="directory-name" type="text" maxlength="40" placeholder="Ex: Lea">
-          </label>
-          <button type="submit" class="btn btn-secondary">Enregistrer le nom</button>
-        </form>
-        <div class="saved-participants-panel">
-          <div class="card-head compact-head">
-            <h3>Participants enregistres</h3>
-            <span class="muted">Cliquer pour reutiliser un nom</span>
+          <form id="directory-form" class="directory-form" autocomplete="off">
+            <label>
+              <span>Creer un participant reutilisable</span>
+              <input id="directory-name" name="directory-name" type="text" maxlength="40" placeholder="Ex: Lea">
+            </label>
+            <button type="submit" class="btn btn-secondary">Enregistrer le nom</button>
+          </form>
+          <div class="saved-participants-panel">
+            <div class="card-head compact-head">
+              <h3>Participants enregistres</h3>
+              <span class="muted">Cliquer pour reutiliser un nom</span>
+            </div>
+            <datalist id="saved-participants-list"></datalist>
+            <div id="saved-participants-ui" class="saved-participants-list"></div>
           </div>
-          <datalist id="saved-participants-list"></datalist>
-          <div id="saved-participants-ui" class="saved-participants-list"></div>
-        </div>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Nom</th>
-                <th>Pari</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="participants-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="card result-card">
-        <div class="card-head">
-          <h2>Resultat</h2>
-          <span class="muted">Calcule a la fin de la session</span>
-        </div>
-        <div id="result-content" class="result-content"></div>
-      </section>
-
-      <section class="card stats-card">
-        <div class="card-head">
-          <h2>Stats</h2>
-          <span class="muted">Session courante + historique</span>
-        </div>
-        <div class="stats-grid">
-          <div class="stats-panel">
-            <h3>Distribution des paris</h3>
-            <div id="guess-histogram" class="histogram empty-state">Aucun pari pour le moment.</div>
-          </div>
-          <div class="stats-panel">
-            <h3>Resume des paris</h3>
-            <dl id="guess-summary" class="summary-grid"></dl>
-          </div>
-          <div class="stats-panel">
-            <h3>Ecart absolu vs resultat</h3>
-            <div id="guess-gaps" class="table-wrap compact-wrap"></div>
-          </div>
-          <div class="stats-panel">
-            <h3>Tendance des "ok" finaux</h3>
-            <div id="trend-chart" class="trend-chart empty-state">Pas encore assez de sessions terminees.</div>
-          </div>
-        </div>
-        <div class="stats-panel history-panel">
-          <h3>Historique des sessions</h3>
           <div class="table-wrap">
-            <table class="data-table history-table">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Nom</th>
+                  <th>Pari</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="participants-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card stats-card">
+          <div class="card-head">
+            <h2>Stats</h2>
+            <span class="muted">Session courante + historique</span>
+          </div>
+          <div class="stats-grid">
+            <div class="stats-panel">
+              <h3>Distribution des paris</h3>
+              <div id="guess-histogram" class="histogram empty-state">Aucun pari pour le moment.</div>
+            </div>
+            <div class="stats-panel">
+              <h3>Resume des paris</h3>
+              <dl id="guess-summary" class="summary-grid"></dl>
+            </div>
+            <div class="stats-panel">
+              <h3>Ecart absolu vs resultat</h3>
+              <div id="guess-gaps" class="table-wrap compact-wrap"></div>
+            </div>
+            <div class="stats-panel">
+              <h3>Tendance des "ok" finaux</h3>
+              <div id="trend-chart" class="trend-chart empty-state">Pas encore assez de sessions terminees.</div>
+            </div>
+          </div>
+          <div class="stats-panel history-panel">
+            <h3>Historique des sessions</h3>
+            <div class="table-wrap">
+              <table class="data-table history-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Etat</th>
+                    <th>OK finaux</th>
+                    <th>Participants</th>
+                    <th>Cagnote</th>
+                    <th>Resultat</th>
+                  </tr>
+                </thead>
+                <tbody id="history-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <aside class="side-column">
+        <section class="card timer-card">
+          <div class="card-head">
+            <h2>Timer</h2>
+            <span class="muted">15:00 maximum</span>
+          </div>
+          <div id="timer-display" class="timer-display">15:00</div>
+          <div class="button-row">
+            <button id="start-btn" class="btn btn-primary">Demarrer</button>
+            <button id="pause-btn" class="btn btn-secondary">Pause</button>
+            <button id="resume-btn" class="btn btn-secondary">Reprendre</button>
+            <button id="stop-btn" class="btn btn-danger">Stop</button>
+          </div>
+          <p id="timer-meta" class="card-note"></p>
+        </section>
+
+        <section class="card counter-card">
+          <div class="card-head">
+            <h2>Compteur "OK"</h2>
+            <span class="shortcut">Espace = +1</span>
+          </div>
+          <div id="ok-count-display" class="ok-display">0</div>
+          <div class="button-row">
+            <button id="ok-btn" class="btn btn-accent btn-large">OK +1</button>
+            <button id="undo-btn" class="btn btn-secondary">Annuler le dernier OK</button>
+          </div>
+          <label class="toggle">
+            <input id="sound-toggle" type="checkbox">
+            <span>Son de clic actif</span>
+          </label>
+          <p class="card-note">La repetition automatique de la touche Espace est ignoree.</p>
+        </section>
+
+        <section class="card pot-card">
+          <div class="card-head">
+            <h2>Cagnote</h2>
+            <span class="muted">1 CHF par participant</span>
+          </div>
+          <div id="pot-display" class="money-display">0.00 CHF</div>
+          <dl class="stat-list">
+            <div>
+              <dt>Report precedent</dt>
+              <dd id="carry-display">0.00 CHF</dd>
+            </div>
+            <div>
+              <dt>Participants</dt>
+              <dd id="participant-count-display">0</dd>
+            </div>
+            <div>
+              <dt>Pari total ajoute</dt>
+              <dd id="participant-pot-display">0.00 CHF</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="card result-card">
+          <div class="card-head">
+            <h2>Resultat</h2>
+            <span class="muted">Calcule a la fin de la session</span>
+          </div>
+          <div id="result-content" class="result-content"></div>
+        </section>
+      </aside>
+    </main>
+
+    <div id="settings-modal" class="settings-modal" aria-hidden="true">
+      <div id="settings-backdrop" class="settings-backdrop"></div>
+      <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="card-head">
+          <h2 id="settings-title">Reglages</h2>
+          <button id="settings-close-btn" type="button" class="btn btn-secondary">Fermer</button>
+        </div>
+        <p class="card-note">Gestion des donnees sensibles. La suppression d'une session demande une double confirmation.</p>
+        <div class="settings-section">
+          <h3>Supprimer une session</h3>
+          <div class="table-wrap">
+            <table class="data-table">
               <thead>
                 <tr>
                   <th>Date</th>
                   <th>Etat</th>
-                  <th>OK finaux</th>
+                  <th>OK</th>
                   <th>Participants</th>
-                  <th>Cagnote</th>
-                  <th>Resultat</th>
                   <th>Action</th>
                 </tr>
               </thead>
-              <tbody id="history-body"></tbody>
+              <tbody id="settings-sessions-body"></tbody>
             </table>
           </div>
         </div>
+        <div class="settings-section">
+          <h3>Reinitialisation globale</h3>
+          <p class="muted">Efface toutes les sessions, la cagnote reportee et les participants reutilisables.</p>
+          <button id="reset-all-btn" class="btn btn-danger">Effacer tout (danger)</button>
+        </div>
       </section>
-    </main>
+    </div>
 
     <div id="live-region" class="sr-only" aria-live="polite"></div>
   </div>
@@ -955,6 +1042,11 @@
       participantsBody: document.getElementById("participants-body"),
       resultContent: document.getElementById("result-content"),
       newSessionBtn: document.getElementById("new-session-btn"),
+      settingsBtn: document.getElementById("settings-btn"),
+      settingsModal: document.getElementById("settings-modal"),
+      settingsBackdrop: document.getElementById("settings-backdrop"),
+      settingsCloseBtn: document.getElementById("settings-close-btn"),
+      settingsSessionsBody: document.getElementById("settings-sessions-body"),
       resetAllBtn: document.getElementById("reset-all-btn"),
       guessHistogram: document.getElementById("guess-histogram"),
       guessSummary: document.getElementById("guess-summary"),
@@ -973,6 +1065,7 @@
     let appStateDocRef = null;
     let applyingRemoteSnapshot = false;
     let remotePersistTimer = null;
+    let settingsModalOpen = false;
 
     ensureCurrentSession();
     syncTimerStateOnLoad();
@@ -994,8 +1087,26 @@
       elements.setAdminBtn.addEventListener("click", handleSetAdminFromSelect);
       elements.claimAdminBtn.addEventListener("click", claimAdmin);
       elements.newSessionBtn.addEventListener("click", createNextSession);
+      elements.settingsBtn.addEventListener("click", openSettingsModal);
+      elements.settingsCloseBtn.addEventListener("click", closeSettingsModal);
+      elements.settingsBackdrop.addEventListener("click", closeSettingsModal);
       elements.resetAllBtn.addEventListener("click", resetAllData);
       document.addEventListener("keydown", handleGlobalKeydown);
+    }
+
+    function openSettingsModal() {
+      settingsModalOpen = true;
+      elements.settingsModal.classList.add("open");
+      elements.settingsModal.setAttribute("aria-hidden", "false");
+      document.body.style.overflow = "hidden";
+      renderSettingsPanel();
+    }
+
+    function closeSettingsModal() {
+      settingsModalOpen = false;
+      elements.settingsModal.classList.remove("open");
+      elements.settingsModal.setAttribute("aria-hidden", "true");
+      document.body.style.overflow = "";
     }
 
     let remoteUnsubscribe = null;
@@ -1836,6 +1947,7 @@
       announce("Toutes les donnees locales ont ete reinitialisees.");
       startTickingIfNeeded();
       render();
+      closeSettingsModal();
     }
 
     function handleSoundToggle() {
@@ -1844,6 +1956,15 @@
     }
 
     function handleGlobalKeydown(event) {
+      if (event.key === "Escape" && settingsModalOpen) {
+        closeSettingsModal();
+        return;
+      }
+
+      if (settingsModalOpen) {
+        return;
+      }
+
       const session = getCurrentSession();
       const target = event.target;
 
@@ -1891,6 +2012,7 @@
       renderParticipants(session);
       renderResult(session);
       renderStats(session);
+      renderSettingsPanel();
     }
 
     function renderHeader(session) {
@@ -2358,7 +2480,7 @@
       if (!state.sessions.length) {
         elements.historyBody.innerHTML = `
           <tr>
-            <td colspan="7" class="muted">Aucune session enregistree.</td>
+            <td colspan="6" class="muted">Aucune session enregistree.</td>
           </tr>
         `;
         return;
@@ -2373,7 +2495,6 @@
             : session.winners.length
               ? session.winners.join(", ")
               : "Report";
-          const canDelete = session.status !== "running" && state.sessions.length > 1;
 
           return `
             <tr>
@@ -2383,6 +2504,40 @@
               <td>${session.participants.length}</td>
               <td>${formatCurrency(getDynamicPotCents(session))}</td>
               <td>${escapeHtml(resultLabel)}</td>
+            </tr>
+          `;
+        })
+        .join("");
+
+      elements.historyBody.innerHTML = rows;
+    }
+
+    function renderSettingsPanel() {
+      const current = getCurrentSession();
+      const canManageSettings = !current.adminUid || isCurrentUserAdmin(current);
+      elements.resetAllBtn.disabled = !canManageSettings;
+
+      if (!state.sessions.length) {
+        elements.settingsSessionsBody.innerHTML = `
+          <tr>
+            <td colspan="5" class="muted">Aucune session enregistree.</td>
+          </tr>
+        `;
+        return;
+      }
+
+      const rows = [...state.sessions]
+        .reverse()
+        .map((session) => {
+          const presentation = getStatusPresentation(session);
+          const canDelete = canManageSettings && session.status !== "running" && state.sessions.length > 1;
+
+          return `
+            <tr>
+              <td>${formatDateTime(session.dateISO)}</td>
+              <td>${presentation.label}</td>
+              <td>${session.status === "finished" ? session.okCount : "-"}</td>
+              <td>${session.participants.length}</td>
               <td>
                 <button
                   type="button"
@@ -2398,8 +2553,8 @@
         })
         .join("");
 
-      elements.historyBody.innerHTML = rows;
-      elements.historyBody.querySelectorAll("[data-delete-session]").forEach((button) => {
+      elements.settingsSessionsBody.innerHTML = rows;
+      elements.settingsSessionsBody.querySelectorAll("[data-delete-session]").forEach((button) => {
         button.addEventListener("click", () => deleteSessionById(button.dataset.deleteSession));
       });
     }
