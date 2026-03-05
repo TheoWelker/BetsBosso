@@ -262,7 +262,8 @@
     }
 
     .btn:focus-visible,
-    input:focus-visible {
+    input:focus-visible,
+    select:focus-visible {
       outline: 3px solid rgba(192, 86, 33, 0.28);
       outline-offset: 2px;
     }
@@ -352,6 +353,39 @@
       display: grid;
       gap: 8px;
       font-weight: 600;
+    }
+
+    .enrollment-shell {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .admin-panel {
+      padding: 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--surface-strong);
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .admin-panel label {
+      display: grid;
+      gap: 8px;
+      font-weight: 600;
+    }
+
+    select {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.8);
+      color: var(--text);
+      font: inherit;
     }
 
     .directory-form {
@@ -656,6 +690,7 @@
       }
 
       .participant-form,
+      .enrollment-shell,
       .stats-grid {
         grid-template-columns: 1fr;
       }
@@ -695,7 +730,7 @@
         </div>
         <div class="hero-actions">
           <button id="new-session-btn" class="btn btn-secondary">Nouvelle session</button>
-          <button id="reset-all-btn" class="btn btn-danger">Reinitialiser tout</button>
+          <button id="reset-all-btn" class="btn btn-danger">Effacer tout (danger)</button>
         </div>
       </div>
     </header>
@@ -758,22 +793,34 @@
       <section class="card participants-card">
         <div class="card-head">
           <h2>Participants et paris</h2>
-          <div class="button-row">
-            <span id="betting-status" class="muted"></span>
-            <button id="claim-admin-btn" type="button" class="btn btn-secondary">Me definir admin</button>
+          <span id="betting-status" class="muted"></span>
+        </div>
+        <p class="card-note">1) Enregistre ta mise. 2) Definis l'admin unique de la session. 3) L'admin lance le timer.</p>
+        <div class="enrollment-shell">
+          <form id="participant-form" class="participant-form" autocomplete="off">
+            <label>
+              <span>Ton nom</span>
+              <input id="participant-name" name="name" type="text" maxlength="40" placeholder="Ex: Theo" list="saved-participants-list" required>
+            </label>
+            <label>
+              <span>Ton pari</span>
+              <input id="participant-guess" name="guess" type="number" min="0" step="1" placeholder="0" required>
+            </label>
+            <button type="submit" class="btn btn-primary">Enregistrer ma mise</button>
+          </form>
+          <div class="admin-panel">
+            <h3>Admin de la session</h3>
+            <p class="muted">Un seul admin. Il demarre/stop le timer et compte les "OK".</p>
+            <label>
+              <span>Choisir un participant</span>
+              <select id="admin-select"></select>
+            </label>
+            <div class="button-row">
+              <button id="set-admin-btn" type="button" class="btn btn-secondary">Definir admin</button>
+              <button id="claim-admin-btn" type="button" class="btn btn-secondary">Me definir admin</button>
+            </div>
           </div>
         </div>
-        <form id="participant-form" class="participant-form" autocomplete="off">
-          <label>
-            <span>Nom</span>
-            <input id="participant-name" name="name" type="text" maxlength="40" placeholder="Ex: Theo" list="saved-participants-list" required>
-          </label>
-          <label>
-            <span>Pari</span>
-            <input id="participant-guess" name="guess" type="number" min="0" step="1" placeholder="0" required>
-          </label>
-          <button type="submit" class="btn btn-primary">Ajouter</button>
-        </form>
         <form id="directory-form" class="directory-form" autocomplete="off">
           <label>
             <span>Creer un participant reutilisable</span>
@@ -846,6 +893,7 @@
                   <th>Participants</th>
                   <th>Cagnote</th>
                   <th>Resultat</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody id="history-body"></tbody>
@@ -901,6 +949,8 @@
       directoryName: document.getElementById("directory-name"),
       savedParticipantsList: document.getElementById("saved-participants-list"),
       savedParticipantsUi: document.getElementById("saved-participants-ui"),
+      adminSelect: document.getElementById("admin-select"),
+      setAdminBtn: document.getElementById("set-admin-btn"),
       claimAdminBtn: document.getElementById("claim-admin-btn"),
       participantsBody: document.getElementById("participants-body"),
       resultContent: document.getElementById("result-content"),
@@ -941,6 +991,7 @@
       elements.soundToggle.addEventListener("change", handleSoundToggle);
       elements.participantForm.addEventListener("submit", handleParticipantSubmit);
       elements.directoryForm.addEventListener("submit", handleDirectorySubmit);
+      elements.setAdminBtn.addEventListener("click", handleSetAdminFromSelect);
       elements.claimAdminBtn.addEventListener("click", claimAdmin);
       elements.newSessionBtn.addEventListener("click", createNextSession);
       elements.resetAllBtn.addEventListener("click", resetAllData);
@@ -1070,6 +1121,8 @@
         ? [...new Set(raw.participantDirectory.map((name) => String(name || "").trim()).filter(Boolean))]
         : [];
       safe.sessions = Array.isArray(raw?.sessions) ? raw.sessions.map(normalizeSession).filter(Boolean) : [];
+      safe.sessions.sort((left, right) => new Date(left.dateISO).getTime() - new Date(right.dateISO).getTime());
+      recomputeDerivedForState(safe);
 
       return safe;
     }
@@ -1172,7 +1225,53 @@
       };
     }
 
+    function recomputeDerivedForState(targetState) {
+      if (!targetState || !Array.isArray(targetState.sessions)) {
+        return;
+      }
+
+      targetState.sessions.sort((left, right) => new Date(left.dateISO).getTime() - new Date(right.dateISO).getTime());
+      let carry = 0;
+
+      targetState.sessions.forEach((session) => {
+        session.baseCarryPotCents = carry;
+        session.potCents = session.baseCarryPotCents + session.participants.length * PARTICIPATION_FEE_CENTS;
+
+        if (session.status === "finished") {
+          session.winners = session.participants
+            .filter((participant) => participant.guess === session.okCount)
+            .map((participant) => participant.name);
+
+          if (session.winners.length > 0) {
+            const baseShare = Math.floor(session.potCents / session.winners.length);
+            const remainder = session.potCents % session.winners.length;
+            session.payoutRemainderCents = remainder;
+            session.winnerPayouts = session.winners.map((name, index) => ({
+              name,
+              amountCents: baseShare + (index === 0 ? remainder : 0),
+            }));
+            carry = 0;
+          } else {
+            session.payoutRemainderCents = 0;
+            session.winnerPayouts = [];
+            carry = session.potCents;
+          }
+        } else {
+          session.winners = [];
+          session.winnerPayouts = [];
+          session.payoutRemainderCents = 0;
+        }
+      });
+
+      targetState.carryPotCents = carry;
+    }
+
+    function recomputeAllDerivedData() {
+      recomputeDerivedForState(state);
+    }
+
     function persistState() {
+      recomputeAllDerivedData();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 
       if (!firebaseReady || !appStateDocRef || applyingRemoteSnapshot) {
@@ -1577,6 +1676,23 @@
       setSessionAdmin(currentParticipant.uid, currentParticipant.name);
     }
 
+    function handleSetAdminFromSelect() {
+      const session = getCurrentSession();
+      const selectedUid = elements.adminSelect.value;
+      if (!selectedUid) {
+        announce("Choisis un participant dans la liste admin.");
+        return;
+      }
+
+      const participant = session.participants.find((entry) => entry.uid === selectedUid);
+      if (!participant) {
+        announce("Participant introuvable.");
+        return;
+      }
+
+      setSessionAdmin(participant.uid, participant.name);
+    }
+
     function setSessionAdmin(uid, name) {
       const session = getCurrentSession();
       if (session.status !== "not_started") {
@@ -1646,6 +1762,53 @@
       render();
     }
 
+    function deleteSessionById(sessionId) {
+      if (state.sessions.length <= 1) {
+        announce("Il faut garder au moins une session.");
+        return;
+      }
+
+      const index = state.sessions.findIndex((session) => session.id === sessionId);
+      if (index < 0) {
+        return;
+      }
+
+      const target = state.sessions[index];
+      if (target.status === "running") {
+        announce("Impossible de supprimer une session en cours.");
+        return;
+      }
+
+      const current = getCurrentSession();
+      if (current.adminUid && !isCurrentUserAdmin(current)) {
+        announce("Seul l'admin actuel peut supprimer une session.");
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Supprimer la session du ${formatDateTime(target.dateISO)} ? Cette action est irreversible.`,
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      const typed = window.prompt("Tape SUPPRIMER pour confirmer.");
+      if (typed !== "SUPPRIMER") {
+        announce("Suppression annulee.");
+        return;
+      }
+
+      state.sessions.splice(index, 1);
+      if (!state.sessions.length) {
+        state.sessions.push(createSession(0));
+      }
+
+      persistState();
+      startTickingIfNeeded();
+      render();
+      announce("Session supprimee.");
+    }
+
     function resetAllData() {
       const current = getCurrentSession();
       if (current.adminUid && !isCurrentUserAdmin(current)) {
@@ -1658,6 +1821,12 @@
       );
 
       if (!confirmed) {
+        return;
+      }
+
+      const typed = window.prompt("Action sensible: tape SUPPRIMER TOUT pour confirmer.");
+      if (typed !== "SUPPRIMER TOUT") {
+        announce("Reinitialisation annulee.");
         return;
       }
 
@@ -1732,7 +1901,8 @@
       const meLabel = currentUser?.uid ? `Toi: ${currentUser.uid.slice(0, 6)}` : "Connexion...";
       const syncLabel = firebaseReady ? (remoteLoading ? "Synchro..." : "Live") : "Local";
       elements.sessionDate.textContent = `${formatDateTime(session.dateISO)} | ${adminLabel} | ${meLabel} | ${syncLabel}`;
-      elements.newSessionBtn.disabled = session.status !== "finished";
+      elements.newSessionBtn.disabled = session.status !== "finished" || (session.adminUid && !isCurrentUserAdmin(session));
+      elements.resetAllBtn.disabled = Boolean(session.adminUid && !isCurrentUserAdmin(session));
       elements.claimAdminBtn.disabled = !canCurrentUserSetAdmin(session);
     }
 
@@ -1816,6 +1986,17 @@
       elements.participantName.disabled = !betsOpen;
       elements.participantGuess.disabled = !betsOpen;
       elements.participantForm.querySelector("button[type='submit']").disabled = !betsOpen;
+      elements.adminSelect.disabled = !canSetAdmin;
+      elements.setAdminBtn.disabled = !canSetAdmin;
+      elements.claimAdminBtn.disabled = !canSetAdmin;
+      elements.adminSelect.innerHTML = [`<option value="">Choisir...</option>`]
+        .concat(
+          session.participants.map(
+            (participant) =>
+              `<option value="${escapeAttribute(participant.uid || "")}" ${participant.uid === session.adminUid ? "selected" : ""}>${escapeHtml(participant.name)}</option>`,
+          ),
+        )
+        .join("");
 
       if (!session.participants.length) {
         elements.participantsBody.innerHTML = `
@@ -1837,7 +2018,7 @@
               <td>
                 <span class="participant-cell">
                   <span class="participant-name">${escapeHtml(participant.name)}</span>
-                  ${isParticipantAdmin ? '<span class="admin-badge" title="Admin: c\'est lui qui compte" aria-label="Admin">👑</span>' : ""}
+                  ${isParticipantAdmin ? '<span class="admin-badge" title="Admin: c\'est lui qui compte" aria-label="Admin">&#128081;</span>' : ""}
                   ${isMe ? '<span class="participant-tag">toi</span>' : ""}
                 </span>
               </td>
@@ -1852,15 +2033,6 @@
                   >
                     Supprimer
                   </button>
-                  <button
-                    type="button"
-                    class="btn btn-secondary"
-                    data-admin-uid="${escapeAttribute(participant.uid || "")}"
-                    data-admin-name="${escapeAttribute(participant.name)}"
-                    ${(canSetAdmin && participant.uid) ? "" : "disabled"}
-                  >
-                    Definir admin
-                  </button>
                 </div>
               </td>
             </tr>
@@ -1871,12 +2043,6 @@
 
       elements.participantsBody.querySelectorAll("[data-remove-uid]").forEach((button) => {
         button.addEventListener("click", () => removeParticipant(button.dataset.removeUid));
-      });
-
-      elements.participantsBody.querySelectorAll("[data-admin-uid]").forEach((button) => {
-        button.addEventListener("click", () => {
-          setSessionAdmin(button.dataset.adminUid, button.dataset.adminName);
-        });
       });
     }
 
@@ -2192,7 +2358,7 @@
       if (!state.sessions.length) {
         elements.historyBody.innerHTML = `
           <tr>
-            <td colspan="6" class="muted">Aucune session enregistree.</td>
+            <td colspan="7" class="muted">Aucune session enregistree.</td>
           </tr>
         `;
         return;
@@ -2207,6 +2373,7 @@
             : session.winners.length
               ? session.winners.join(", ")
               : "Report";
+          const canDelete = session.status !== "running" && state.sessions.length > 1;
 
           return `
             <tr>
@@ -2216,12 +2383,25 @@
               <td>${session.participants.length}</td>
               <td>${formatCurrency(getDynamicPotCents(session))}</td>
               <td>${escapeHtml(resultLabel)}</td>
+              <td>
+                <button
+                  type="button"
+                  class="inline-delete"
+                  data-delete-session="${escapeAttribute(session.id)}"
+                  ${canDelete ? "" : "disabled"}
+                >
+                  Supprimer
+                </button>
+              </td>
             </tr>
           `;
         })
         .join("");
 
       elements.historyBody.innerHTML = rows;
+      elements.historyBody.querySelectorAll("[data-delete-session]").forEach((button) => {
+        button.addEventListener("click", () => deleteSessionById(button.dataset.deleteSession));
+      });
     }
 
     function getStatusPresentation(session) {
