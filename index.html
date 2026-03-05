@@ -1209,7 +1209,7 @@
     }
 
     function canCurrentUserSetAdmin(session) {
-      return session.status !== "finished" && (isCurrentUserAdmin(session) || !session.adminUid);
+      return session.status === "not_started" && (isCurrentUserAdmin(session) || !session.adminUid);
     }
 
     function syncTimerStateOnLoad() {
@@ -1544,6 +1544,10 @@
 
     function setSessionAdmin(uid, name) {
       const session = getCurrentSession();
+      if (session.status !== "not_started") {
+        announce("L'admin est fige des que la session a demarre.");
+        return;
+      }
       const participant = session.participants.find((entry) => entry.uid === uid);
       if (!participant) {
         announce("Ce participant n'est pas dans la session.");
@@ -1711,7 +1715,7 @@
       } else {
         elements.timerMeta.textContent = session.adminUid
           ? "Ajoutez des participants avant ou pendant le cours, puis l'admin demarre le timer."
-          : "Ajoutez des participants puis definissez un admin pour demarrer.";
+          : "Nouvelle session: choisissez un admin (modifiable avant demarrage), puis demarrez.";
       }
 
       elements.startBtn.disabled = !(session.status === "not_started" && isAdmin);
