@@ -56,6 +56,72 @@
       pointer-events: none;
     }
 
+    body.locked {
+      overflow: hidden;
+    }
+
+    body.locked .app-shell {
+      filter: blur(6px);
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .auth-gate {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .auth-gate.open {
+      display: flex;
+    }
+
+    .auth-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(20, 16, 11, 0.55);
+      backdrop-filter: blur(4px);
+    }
+
+    .auth-panel {
+      position: relative;
+      width: min(460px, calc(100% - 24px));
+      padding: 24px;
+      border-radius: 22px;
+      border: 1px solid var(--border);
+      background: linear-gradient(145deg, rgba(255, 252, 247, 0.98), rgba(249, 242, 231, 0.98));
+      box-shadow: 0 30px 70px rgba(44, 30, 16, 0.35);
+    }
+
+    .auth-panel p {
+      margin: 10px 0 0;
+      color: var(--muted);
+    }
+
+    .auth-form {
+      margin-top: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .auth-form label {
+      display: grid;
+      gap: 8px;
+      font-weight: 600;
+    }
+
+    .auth-error {
+      min-height: 1.3em;
+      margin: 0;
+      color: var(--danger-strong);
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+
     .app-shell {
       position: relative;
       max-width: 1400px;
@@ -1065,6 +1131,22 @@
     <div id="live-region" class="sr-only" aria-live="polite"></div>
   </div>
 
+  <div id="auth-gate" class="auth-gate" aria-hidden="true">
+    <div class="auth-backdrop"></div>
+    <section class="auth-panel" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <h2 id="auth-title">Connexion BossoBets</h2>
+      <p>Entre le mot de passe de la classe pour acceder au site.</p>
+      <form id="auth-form" class="auth-form" autocomplete="off">
+        <label>
+          <span>Mot de passe</span>
+          <input id="access-code" type="password" maxlength="80" placeholder="Mot de passe" required>
+        </label>
+        <button type="submit" class="btn btn-primary">Se connecter</button>
+        <p id="auth-error" class="auth-error" role="alert" aria-live="polite"></p>
+      </form>
+    </section>
+  </div>
+
   <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
@@ -1072,6 +1154,9 @@
     const STORAGE_KEY = "paris-ok-tracker-state-v1";
     const SESSION_DURATION_SECONDS = 15 * 60;
     const PARTICIPATION_FEE_CENTS = 100;
+    const ACCESS_SESSION_KEY = "bossobets-access-ok-v1";
+    // Change ce mot de passe pour ta classe avant partage.
+    const ACCESS_CODE = "Mecatro1";
     const CLASS_ID = "Mecatro1";
     const FIREBASE_CONFIG = {
       apiKey: "AIzaSyC2GcaxNloFobzgZ4daSytwnJ-B1xBARj8",
@@ -1120,6 +1205,10 @@
       settingsCloseBtn: document.getElementById("settings-close-btn"),
       settingsSessionsBody: document.getElementById("settings-sessions-body"),
       resetAllBtn: document.getElementById("reset-all-btn"),
+      authGate: document.getElementById("auth-gate"),
+      authForm: document.getElementById("auth-form"),
+      accessCodeInput: document.getElementById("access-code"),
+      authError: document.getElementById("auth-error"),
       guessHistogram: document.getElementById("guess-histogram"),
       guessSummary: document.getElementById("guess-summary"),
       guessGaps: document.getElementById("guess-gaps"),
@@ -1138,15 +1227,18 @@
     let applyingRemoteSnapshot = false;
     let remotePersistTimer = null;
     let settingsModalOpen = false;
+    let isAuthenticated = false;
+    let firebaseInitRequested = false;
 
     ensureCurrentSession();
     syncTimerStateOnLoad();
     bindEvents();
     render();
     startTickingIfNeeded();
-    initFirebaseSync();
+    initAccessGate();
 
     function bindEvents() {
+      elements.authForm.addEventListener("submit", handleAccessSubmit);
       elements.startBtn.addEventListener("click", startSession);
       elements.pauseBtn.addEventListener("click", pauseSession);
       elements.resumeBtn.addEventListener("click", resumeSession);
@@ -1164,6 +1256,67 @@
       elements.settingsBackdrop.addEventListener("click", closeSettingsModal);
       elements.resetAllBtn.addEventListener("click", resetAllData);
       document.addEventListener("keydown", handleGlobalKeydown);
+    }
+
+    function initAccessGate() {
+      const alreadyUnlocked = sessionStorage.getItem(ACCESS_SESSION_KEY) === "1";
+      if (alreadyUnlocked) {
+        unlockApp();
+        return;
+      }
+
+      lockApp();
+      announce("Mot de passe requis.");
+    }
+
+    function lockApp() {
+      isAuthenticated = false;
+      document.body.classList.add("locked");
+      elements.authGate.classList.add("open");
+      elements.authGate.setAttribute("aria-hidden", "false");
+      elements.accessCodeInput.value = "";
+      elements.authError.textContent = "";
+      window.setTimeout(() => elements.accessCodeInput.focus(), 0);
+    }
+
+    function unlockApp() {
+      isAuthenticated = true;
+      sessionStorage.setItem(ACCESS_SESSION_KEY, "1");
+      document.body.classList.remove("locked");
+      elements.authGate.classList.remove("open");
+      elements.authGate.setAttribute("aria-hidden", "true");
+      elements.authError.textContent = "";
+      startFirebaseSyncIfNeeded();
+      announce("Connexion acceptee.");
+    }
+
+    function startFirebaseSyncIfNeeded() {
+      if (firebaseInitRequested) {
+        return;
+      }
+
+      firebaseInitRequested = true;
+      initFirebaseSync();
+    }
+
+    function handleAccessSubmit(event) {
+      event.preventDefault();
+      const typedCode = elements.accessCodeInput.value;
+
+      if (!typedCode) {
+        elements.authError.textContent = "Entre un mot de passe.";
+        elements.accessCodeInput.focus();
+        return;
+      }
+
+      if (typedCode !== ACCESS_CODE) {
+        elements.authError.textContent = "Mot de passe incorrect.";
+        announce("Echec de connexion.");
+        elements.accessCodeInput.select();
+        return;
+      }
+
+      unlockApp();
     }
 
     function openSettingsModal() {
@@ -2028,6 +2181,10 @@
     }
 
     function handleGlobalKeydown(event) {
+      if (!isAuthenticated) {
+        return;
+      }
+
       if (event.key === "Escape" && settingsModalOpen) {
         closeSettingsModal();
         return;
