@@ -301,6 +301,46 @@
       margin-bottom: 18px;
     }
 
+    .counter-summary {
+      margin: -6px 0 14px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .counter-live {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--surface-strong);
+    }
+
+    .counter-live h3 {
+      margin-bottom: 10px;
+      font-size: 0.95rem;
+    }
+
+    .counter-live-list {
+      display: grid;
+      gap: 8px;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+
+    .counter-live-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: rgba(20, 83, 45, 0.06);
+    }
+
+    .counter-live-row strong {
+      font-size: 1rem;
+    }
+
     .money-display {
       font-size: clamp(2.25rem, 5vw, 3.8rem);
       margin-bottom: 18px;
@@ -1052,15 +1092,21 @@
             <span class="shortcut">Espace = +1</span>
           </div>
           <div id="ok-count-display" class="ok-display">0</div>
+          <p id="counter-summary" class="counter-summary"></p>
           <div class="button-row">
+            <button id="register-counter-btn" class="btn btn-secondary">M'inscrire comme compteur</button>
             <button id="ok-btn" class="btn btn-accent btn-large">OK +1</button>
             <button id="undo-btn" class="btn btn-secondary">Annuler le dernier OK</button>
+          </div>
+          <div class="counter-live">
+            <h3>Compteurs en direct</h3>
+            <div id="counters-live-list" class="counter-live-list"></div>
           </div>
           <label class="toggle">
             <input id="sound-toggle" type="checkbox">
             <span>Son de clic actif</span>
           </label>
-          <p class="card-note">La repetition automatique de la touche Espace est ignoree.</p>
+          <p class="card-note">La repetition automatique de la touche Espace est ignoree. Avec plusieurs compteurs, le resultat est la moyenne arrondie au superieur.</p>
         </section>
 
         <section class="card pot-card">
@@ -1178,6 +1224,9 @@
       resumeBtn: document.getElementById("resume-btn"),
       stopBtn: document.getElementById("stop-btn"),
       okCountDisplay: document.getElementById("ok-count-display"),
+      counterSummary: document.getElementById("counter-summary"),
+      registerCounterBtn: document.getElementById("register-counter-btn"),
+      countersLiveList: document.getElementById("counters-live-list"),
       okBtn: document.getElementById("ok-btn"),
       undoBtn: document.getElementById("undo-btn"),
       soundToggle: document.getElementById("sound-toggle"),
@@ -1243,6 +1292,7 @@
       elements.pauseBtn.addEventListener("click", pauseSession);
       elements.resumeBtn.addEventListener("click", resumeSession);
       elements.stopBtn.addEventListener("click", () => finishSession("manual_stop"));
+      elements.registerCounterBtn.addEventListener("click", registerCurrentUserCounter);
       elements.okBtn.addEventListener("click", incrementOkCount);
       elements.undoBtn.addEventListener("click", undoLastOk);
       elements.soundToggle.addEventListener("change", handleSoundToggle);
@@ -1477,6 +1527,15 @@
             }))
             .filter((participant) => participant.name)
         : [];
+      const counters = Array.isArray(session.counters)
+        ? session.counters
+            .map((counter) => ({
+              uid: String(counter?.uid || ""),
+              name: String(counter?.name || "").trim(),
+              count: Number.isFinite(counter?.count) ? Math.max(0, Math.trunc(counter.count)) : 0,
+            }))
+            .filter((counter) => counter.uid)
+        : [];
 
       const winners = Array.isArray(session.winners) ? session.winners.map(String) : [];
       const winnerPayouts = Array.isArray(session.winnerPayouts)
@@ -1500,6 +1559,7 @@
         status,
         okCount: Number.isFinite(session.okCount) ? Math.max(0, Math.trunc(session.okCount)) : 0,
         participants,
+        counters,
         potCents: Number.isFinite(session.potCents) ? Math.max(0, Math.trunc(session.potCents)) : 0,
         winners,
         winnerPayouts,
@@ -1544,6 +1604,7 @@
         status: "not_started",
         okCount: 0,
         participants: [],
+        counters: [],
         potCents: Math.max(0, Math.trunc(baseCarryPotCents)),
         winners: [],
         winnerPayouts: [],
@@ -1570,6 +1631,10 @@
       let carry = 0;
 
       targetState.sessions.forEach((session) => {
+        if (!Array.isArray(session.counters)) {
+          session.counters = [];
+        }
+        syncSessionOkCountFromCounters(session);
         session.baseCarryPotCents = carry;
         session.potCents = session.baseCarryPotCents + session.participants.length * PARTICIPATION_FEE_CENTS;
 
@@ -1662,16 +1727,77 @@
       return session.baseCarryPotCents + session.participants.length * PARTICIPATION_FEE_CENTS;
     }
 
+    function getCounterStats(session) {
+      const counters = Array.isArray(session.counters) ? session.counters : [];
+      if (!counters.length) {
+        const fallback = Math.max(0, Math.trunc(session.okCount || 0));
+        return {
+          counters: [],
+          total: fallback,
+          average: fallback,
+          roundedAverage: fallback,
+        };
+      }
+
+      const total = counters.reduce((sum, counter) => sum + counter.count, 0);
+      const average = total / counters.length;
+      return {
+        counters,
+        total,
+        average,
+        roundedAverage: Math.ceil(average),
+      };
+    }
+
+    function syncSessionOkCountFromCounters(session) {
+      const stats = getCounterStats(session);
+      session.okCount = stats.roundedAverage;
+    }
+
+    function getCounterDisplayName(session, uid, fallbackName = "") {
+      const participant = session.participants.find((entry) => entry.uid === uid);
+      if (participant?.name) {
+        return participant.name;
+      }
+
+      if (session.adminUid === uid && session.adminName) {
+        return session.adminName;
+      }
+
+      const fromCounter = session.counters.find((entry) => entry.uid === uid);
+      if (fromCounter?.name) {
+        return fromCounter.name;
+      }
+
+      if (fallbackName) {
+        return fallbackName;
+      }
+
+      return uid ? `User ${uid.slice(0, 6)}` : "Compteur";
+    }
+
+    function getCounterByUid(session, uid) {
+      return session.counters.find((counter) => counter.uid === uid);
+    }
+
+    function isCurrentUserCounter(session) {
+      return Boolean(currentUser?.uid && getCounterByUid(session, currentUser.uid));
+    }
+
     function canEditParticipants(session) {
       return session.status !== "finished" && getRemainingMs(session) > 0;
     }
 
     function canCountOk(session) {
-      return session.status === "running" && !session.isPaused && getRemainingMs(session) > 0 && isCurrentUserAdmin(session);
+      return session.status === "running" && !session.isPaused && getRemainingMs(session) > 0 && isCurrentUserCounter(session);
     }
 
     function canUndoOk(session) {
-      return session.status !== "finished" && isCurrentUserAdmin(session) && session.events.some((event) => event.type === "ok");
+      if (session.status === "finished" || !currentUser?.uid) {
+        return false;
+      }
+
+      return session.events.some((event) => event.type === "ok" && event.payload?.counterUid === currentUser.uid);
     }
 
     function isCurrentUserAdmin(session) {
@@ -1729,6 +1855,14 @@
       session.isPaused = false;
       session.runStartedAtMs = Date.now();
       session.elapsedMs = 0;
+      if (!session.counters.length && session.adminUid) {
+        session.counters.push({
+          uid: session.adminUid,
+          name: getCounterDisplayName(session, session.adminUid, session.adminName || ""),
+          count: 0,
+        });
+      }
+      syncSessionOkCountFromCounters(session);
       session.potCents = getDynamicPotCents(session);
       session.events.push({ t: 0, type: "start" });
 
@@ -1802,6 +1936,7 @@
       session.finalElapsedMs = Math.min(session.durationSeconds * 1000, session.elapsedMs);
       session.finishedAtISO = new Date().toISOString();
       session.endReason = endReason;
+      syncSessionOkCountFromCounters(session);
       session.potCents = getDynamicPotCents(session);
 
       session.winners = session.participants
@@ -1835,19 +1970,66 @@
       startTickingIfNeeded();
       render();
     }
+    function registerCurrentUserCounter() {
+      const session = getCurrentSession();
+      if (!currentUser?.uid) {
+        announce("Connexion en cours, reessayez.");
+        return;
+      }
+      if (session.status === "finished") {
+        announce("Session terminee: impossible d'ajouter un compteur.");
+        return;
+      }
+
+      const existingCounter = getCounterByUid(session, currentUser.uid);
+      const counterName = getCounterDisplayName(session, currentUser.uid, "");
+
+      if (existingCounter) {
+        existingCounter.name = counterName;
+        persistState();
+        announce(`Deja inscrit comme compteur: ${counterName}.`);
+        render();
+        return;
+      }
+
+      session.counters.push({
+        uid: currentUser.uid,
+        name: counterName,
+        count: 0,
+      });
+      syncSessionOkCountFromCounters(session);
+      session.events.push({
+        t: getEventTimestampSeconds(session),
+        type: "add_counter",
+        payload: { uid: currentUser.uid, name: counterName },
+      });
+
+      persistState();
+      announce(`Compteur actif: ${counterName}.`);
+      render();
+    }
+
     function incrementOkCount() {
       const session = getCurrentSession();
       if (!canCountOk(session)) {
-        if (!isCurrentUserAdmin(session) && session.status === "running") {
-          announce("Seul l'admin peut compter les OK.");
+        if (session.status === "running" && !isCurrentUserCounter(session)) {
+          announce("Inscris-toi comme compteur pour compter les OK.");
         }
         return;
       }
 
-      session.okCount += 1;
+      const counter = getCounterByUid(session, currentUser.uid);
+      if (!counter) {
+        return;
+      }
+
+      counter.count += 1;
+      counter.name = getCounterDisplayName(session, currentUser.uid, counter.name);
+      syncSessionOkCountFromCounters(session);
       session.events.push({
         t: getEventTimestampSeconds(session),
         type: "ok",
+        payload: { counterUid: currentUser.uid },
       });
 
       persistState();
@@ -1862,9 +2044,13 @@
       }
 
       for (let index = session.events.length - 1; index >= 0; index -= 1) {
-        if (session.events[index].type === "ok") {
+        if (session.events[index].type === "ok" && session.events[index].payload?.counterUid === currentUser?.uid) {
           session.events.splice(index, 1);
-          session.okCount = Math.max(0, session.okCount - 1);
+          const counter = getCounterByUid(session, currentUser.uid);
+          if (counter) {
+            counter.count = Math.max(0, counter.count - 1);
+          }
+          syncSessionOkCountFromCounters(session);
           persistState();
           announce("Dernier OK annule.");
           render();
@@ -1908,6 +2094,10 @@
         existingByUser.guess = guess;
       } else {
         session.participants.push({ uid: currentUser.uid, name, guess });
+      }
+      const existingCounter = getCounterByUid(session, currentUser.uid);
+      if (existingCounter) {
+        existingCounter.name = name;
       }
       session.potCents = getDynamicPotCents(session);
       session.events.push({
@@ -2281,9 +2471,38 @@
     }
 
     function renderCounter(session) {
-      elements.okCountDisplay.textContent = String(session.okCount);
+      const stats = getCounterStats(session);
+      const meIsCounter = isCurrentUserCounter(session);
+      elements.okCountDisplay.textContent = String(stats.roundedAverage);
       elements.okBtn.disabled = !canCountOk(session);
       elements.undoBtn.disabled = !canUndoOk(session);
+      elements.registerCounterBtn.disabled = session.status === "finished" || !currentUser?.uid;
+      elements.registerCounterBtn.textContent = meIsCounter ? "Compteur actif (toi)" : "M'inscrire comme compteur";
+
+      if (!stats.counters.length) {
+        elements.counterSummary.textContent = "Aucun compteur actif. Inscris un ou plusieurs compteurs pour afficher la moyenne.";
+        elements.countersLiveList.innerHTML = `<div class="muted">Aucun compteur enregistre.</div>`;
+        return;
+      }
+
+      if (stats.counters.length === 1) {
+        elements.counterSummary.textContent = `Compteur unique: ${stats.counters[0].name}. Resultat en direct: ${stats.roundedAverage}.`;
+      } else {
+        elements.counterSummary.textContent = `Moyenne en direct: ${stats.total} / ${stats.counters.length} = ${stats.average.toFixed(2)} -> ${stats.roundedAverage}.`;
+      }
+
+      elements.countersLiveList.innerHTML = [...stats.counters]
+        .sort((left, right) => left.name.localeCompare(right.name, "fr", { sensitivity: "base" }))
+        .map((counter) => {
+          const isMe = counter.uid === currentUser?.uid;
+          return `
+            <div class="counter-live-row">
+              <span>${escapeHtml(counter.name)}${isMe ? " (toi)" : ""}</span>
+              <strong>${counter.count}</strong>
+            </div>
+          `;
+        })
+        .join("");
     }
 
     function renderPot(session) {
@@ -2369,7 +2588,7 @@
               <td>
                 <span class="participant-cell">
                   <span class="participant-name">${escapeHtml(participant.name)}</span>
-                  ${isParticipantAdmin ? '<span class="admin-badge" title="Admin: c\'est lui qui compte" aria-label="Admin">&#128081;</span>' : ""}
+                  ${isParticipantAdmin ? '<span class="admin-badge" title="Admin de la session" aria-label="Admin">&#128081;</span>' : ""}
                   ${isMe ? '<span class="participant-tag">toi</span>' : ""}
                 </span>
               </td>
@@ -2398,9 +2617,10 @@
     }
 
     function renderResult(session) {
+      const liveOkCount = getCounterStats(session).roundedAverage;
       if (session.status !== "finished") {
         elements.resultContent.innerHTML = `
-          <p class="result-highlight">${session.okCount} OK pour l'instant</p>
+          <p class="result-highlight">${liveOkCount} OK pour l'instant</p>
           <p class="muted">Le resultat final sera calcule automatiquement a la fin du timer ou lors d'un stop manuel.</p>
           <ul class="info-list">
             <li>Cagnote actuelle: ${formatCurrency(getDynamicPotCents(session))}</li>
