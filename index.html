@@ -1844,7 +1844,19 @@
     }
 
     function canCurrentUserSetAdmin(session) {
-      return session.status === "not_started" && (isCurrentUserAdmin(session) || getSessionAdmins(session).length === 0);
+      return session.status === "not_started";
+    }
+
+    function canCurrentUserRemoveParticipant(session, participantUid) {
+      if (!canEditParticipants(session) || !currentUser?.uid) {
+        return false;
+      }
+
+      if (session.status === "not_started") {
+        return true;
+      }
+
+      return isCurrentUserAdmin(session) || participantUid === currentUser.uid;
     }
 
     function syncTimerStateOnLoad() {
@@ -2233,11 +2245,6 @@
         return;
       }
 
-      if (!canCurrentUserSetAdmin(session)) {
-        announce("Seuls les admins actuels peuvent ajouter un admin.");
-        return;
-      }
-
       setSessionAdmin(currentParticipant.uid, currentParticipant.name);
     }
 
@@ -2272,10 +2279,6 @@
         announce("Ce participant n'est pas dans la session.");
         return;
       }
-      if (!canCurrentUserSetAdmin(session)) {
-        announce("Seuls les admins actuels peuvent ajouter un admin.");
-        return;
-      }
       if (isSessionAdminUid(session, participant.uid)) {
         announce(`${participant.name} est deja admin.`);
         return;
@@ -2293,14 +2296,11 @@
 
     function removeParticipant(uid) {
       const session = getCurrentSession();
-      if (!canEditParticipants(session)) {
-        return;
-      }
-      if (!currentUser?.uid) {
-        return;
-      }
-      if (!isCurrentUserAdmin(session) && uid !== currentUser.uid) {
-        announce("Tu peux seulement supprimer ta propre mise.");
+      if (!canCurrentUserRemoveParticipant(session, uid)) {
+        if (!canEditParticipants(session)) {
+          return;
+        }
+        announce("Suppression non autorisee.");
         return;
       }
 
@@ -2634,6 +2634,7 @@
           (participant) => {
             const isParticipantAdmin = isSessionAdminUid(session, participant.uid);
             const isMe = participant.uid === currentUser?.uid;
+            const canRemove = canCurrentUserRemoveParticipant(session, participant.uid);
 
             return `
             <tr>
@@ -2651,7 +2652,7 @@
                     type="button"
                     class="inline-delete"
                     data-remove-uid="${escapeAttribute(participant.uid || "")}"
-                    ${(betsOpen && (participant.uid === currentUser?.uid || isAdmin)) ? "" : "disabled"}
+                    ${canRemove ? "" : "disabled"}
                   >
                     Supprimer
                   </button>
