@@ -415,6 +415,41 @@
       cursor: pointer;
     }
 
+    .participant-cell {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .participant-name {
+      font-weight: 700;
+    }
+
+    .participant-tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(20, 83, 45, 0.1);
+      color: var(--primary-strong);
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
+    .admin-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      background: rgba(192, 86, 33, 0.14);
+      color: var(--accent-strong);
+      font-size: 0.92rem;
+      line-height: 1;
+    }
+
     .result-content {
       min-height: 180px;
     }
@@ -1714,8 +1749,8 @@
         elements.timerMeta.textContent = "Le compteur tourne. Stop termine la session immediatement.";
       } else {
         elements.timerMeta.textContent = session.adminUid
-          ? "Ajoutez des participants avant ou pendant le cours, puis l'admin demarre le timer."
-          : "Nouvelle session: choisissez un admin (modifiable avant demarrage), puis demarrez.";
+          ? "Ajoutez des participants avant ou pendant le cours, puis l'admin unique demarre le timer."
+          : "Nouvelle session: choisissez un admin unique (modifiable avant demarrage), puis demarrez.";
       }
 
       elements.startBtn.disabled = !(session.status === "not_started" && isAdmin);
@@ -1775,8 +1810,9 @@
       const betsOpen = canEditParticipants(session);
       const canSetAdmin = canCurrentUserSetAdmin(session);
       const isAdmin = isCurrentUserAdmin(session);
+      const adminLabel = session.adminName ? session.adminName : "Aucun";
 
-      elements.bettingStatus.textContent = betsOpen ? "Paris ouverts" : "Paris fermes";
+      elements.bettingStatus.textContent = `${betsOpen ? "Paris ouverts" : "Paris fermes"} | Admin unique: ${adminLabel}`;
       elements.participantName.disabled = !betsOpen;
       elements.participantGuess.disabled = !betsOpen;
       elements.participantForm.querySelector("button[type='submit']").disabled = !betsOpen;
@@ -1792,9 +1828,19 @@
 
       elements.participantsBody.innerHTML = session.participants
         .map(
-          (participant) => `
+          (participant) => {
+            const isParticipantAdmin = participant.uid === session.adminUid;
+            const isMe = participant.uid === currentUser?.uid;
+
+            return `
             <tr>
-              <td>${escapeHtml(participant.name)}${participant.uid === currentUser?.uid ? " (toi)" : ""}${participant.uid === session.adminUid ? " (admin)" : ""}</td>
+              <td>
+                <span class="participant-cell">
+                  <span class="participant-name">${escapeHtml(participant.name)}</span>
+                  ${isParticipantAdmin ? '<span class="admin-badge" title="Admin: c\'est lui qui compte" aria-label="Admin">👑</span>' : ""}
+                  ${isMe ? '<span class="participant-tag">toi</span>' : ""}
+                </span>
+              </td>
               <td>${participant.guess}</td>
               <td>
                 <div class="button-row">
@@ -1818,7 +1864,8 @@
                 </div>
               </td>
             </tr>
-          `,
+          `;
+          },
         )
         .join("");
 
