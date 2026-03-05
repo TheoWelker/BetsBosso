@@ -650,6 +650,7 @@
         <p class="hero-copy">
           Paris reutilisables, compteur en direct, cagnote cumulee et reglement visible en fin de session.
         </p>
+        <p class="eyebrow">Classe: Mecatro1</p>
       </div>
       <div class="hero-side">
         <div class="status-card">
@@ -722,7 +723,10 @@
       <section class="card participants-card">
         <div class="card-head">
           <h2>Participants et paris</h2>
-          <span id="betting-status" class="muted"></span>
+          <div class="button-row">
+            <span id="betting-status" class="muted"></span>
+            <button id="claim-admin-btn" type="button" class="btn btn-secondary">Me definir admin</button>
+          </div>
         </div>
         <form id="participant-form" class="participant-form" autocomplete="off">
           <label>
@@ -819,10 +823,23 @@
     <div id="live-region" class="sr-only" aria-live="polite"></div>
   </div>
 
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
   <script>
     const STORAGE_KEY = "paris-ok-tracker-state-v1";
     const SESSION_DURATION_SECONDS = 15 * 60;
     const PARTICIPATION_FEE_CENTS = 100;
+    const CLASS_ID = "Mecatro1";
+    const FIREBASE_CONFIG = {
+      apiKey: "AIzaSyC2GcaxNloFobzgZ4daSytwnJ-B1xBARj8",
+      authDomain: "betsbosso.firebaseapp.com",
+      projectId: "betsbosso",
+      storageBucket: "betsbosso.firebasestorage.app",
+      messagingSenderId: "250503359412",
+      appId: "1:250503359412:web:b4fa5459ffc6689281a0e1",
+      measurementId: "G-X1YN7SKH7Q",
+    };
 
     const elements = {
       sessionStatusBadge: document.getElementById("session-status-badge"),
@@ -849,6 +866,7 @@
       directoryName: document.getElementById("directory-name"),
       savedParticipantsList: document.getElementById("saved-participants-list"),
       savedParticipantsUi: document.getElementById("saved-participants-ui"),
+      claimAdminBtn: document.getElementById("claim-admin-btn"),
       participantsBody: document.getElementById("participants-body"),
       resultContent: document.getElementById("result-content"),
       newSessionBtn: document.getElementById("new-session-btn"),
@@ -864,12 +882,19 @@
     let state = loadState();
     let tickHandle = null;
     let audioContext = null;
+    let firebaseReady = false;
+    let remoteLoading = false;
+    let currentUser = null;
+    let appStateDocRef = null;
+    let applyingRemoteSnapshot = false;
+    let remotePersistTimer = null;
 
     ensureCurrentSession();
     syncTimerStateOnLoad();
     bindEvents();
     render();
     startTickingIfNeeded();
+    initFirebaseSync();
 
     function bindEvents() {
       elements.startBtn.addEventListener("click", startSession);
@@ -881,9 +906,98 @@
       elements.soundToggle.addEventListener("change", handleSoundToggle);
       elements.participantForm.addEventListener("submit", handleParticipantSubmit);
       elements.directoryForm.addEventListener("submit", handleDirectorySubmit);
+      elements.claimAdminBtn.addEventListener("click", claimAdmin);
       elements.newSessionBtn.addEventListener("click", createNextSession);
       elements.resetAllBtn.addEventListener("click", resetAllData);
       document.addEventListener("keydown", handleGlobalKeydown);
+    }
+
+    let remoteUnsubscribe = null;
+
+    async function initFirebaseSync() {
+      if (!window.firebase) {
+        announce("Firebase indisponible. Mode local actif.");
+        return;
+      }
+
+      try {
+        if (!firebase.apps.length) {
+          firebase.initializeApp(FIREBASE_CONFIG);
+        }
+
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        remoteLoading = true;
+        render();
+
+        await auth.signInAnonymously();
+        auth.onAuthStateChanged(async (user) => {
+          if (!user) {
+            return;
+          }
+
+          currentUser = user;
+          appStateDocRef = db.collection("classes").doc(CLASS_ID).collection("state").doc("app");
+          await ensureRemoteStateDocument();
+          subscribeRemoteState();
+          firebaseReady = true;
+          announce("Mode collaboratif actif.");
+        });
+      } catch (error) {
+        console.error("Impossible d'initialiser Firebase:", error);
+        announce("Mode local actif (Firebase non connecte).");
+        firebaseReady = false;
+        remoteLoading = false;
+        render();
+      }
+    }
+
+    async function ensureRemoteStateDocument() {
+      if (!appStateDocRef) {
+        return;
+      }
+
+      const snapshot = await appStateDocRef.get();
+      if (!snapshot.exists) {
+        ensureCurrentSession();
+        await appStateDocRef.set(serializeStateForRemote(state));
+      }
+    }
+
+    function subscribeRemoteState() {
+      if (!appStateDocRef) {
+        return;
+      }
+
+      if (remoteUnsubscribe) {
+        remoteUnsubscribe();
+      }
+
+      remoteUnsubscribe = appStateDocRef.onSnapshot(
+        (snapshot) => {
+          if (!snapshot.exists) {
+            return;
+          }
+
+          applyingRemoteSnapshot = true;
+          state = normalizeState(snapshot.data());
+          ensureCurrentSession();
+          syncTimerStateOnLoad();
+          remoteLoading = false;
+          render();
+          startTickingIfNeeded();
+          applyingRemoteSnapshot = false;
+        },
+        (error) => {
+          console.error("Erreur de synchronisation Firebase:", error);
+          remoteLoading = false;
+          render();
+        },
+      );
+    }
+
+    function serializeStateForRemote(rawState) {
+      return JSON.parse(JSON.stringify(rawState));
     }
 
     function loadState() {
@@ -933,6 +1047,7 @@
       const participants = Array.isArray(session.participants)
         ? session.participants
             .map((participant) => ({
+              uid: String(participant?.uid || ""),
               name: String(participant?.name || "").trim(),
               guess: Number.isFinite(participant?.guess) ? Math.max(0, Math.trunc(participant.guess)) : 0,
             }))
@@ -985,6 +1100,8 @@
         isPaused: Boolean(session.isPaused),
         finalElapsedMs: Number.isFinite(session.finalElapsedMs) ? Math.max(0, Math.trunc(session.finalElapsedMs)) : null,
         finishedAtISO: session.finishedAtISO ? String(session.finishedAtISO) : null,
+        adminUid: session.adminUid ? String(session.adminUid) : null,
+        adminName: session.adminName ? String(session.adminName) : null,
       };
     }
 
@@ -1015,11 +1132,27 @@
         isPaused: false,
         finalElapsedMs: null,
         finishedAtISO: null,
+        adminUid: null,
+        adminName: null,
       };
     }
 
     function persistState() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+
+      if (!firebaseReady || !appStateDocRef || applyingRemoteSnapshot) {
+        return;
+      }
+
+      if (remotePersistTimer) {
+        clearTimeout(remotePersistTimer);
+      }
+
+      remotePersistTimer = setTimeout(() => {
+        appStateDocRef.set(serializeStateForRemote(state)).catch((error) => {
+          console.error("Echec de sauvegarde distante:", error);
+        });
+      }, 80);
     }
 
     function getCurrentSession() {
@@ -1064,11 +1197,19 @@
     }
 
     function canCountOk(session) {
-      return session.status === "running" && !session.isPaused && getRemainingMs(session) > 0;
+      return session.status === "running" && !session.isPaused && getRemainingMs(session) > 0 && isCurrentUserAdmin(session);
     }
 
     function canUndoOk(session) {
-      return session.status !== "finished" && session.events.some((event) => event.type === "ok");
+      return session.status !== "finished" && isCurrentUserAdmin(session) && session.events.some((event) => event.type === "ok");
+    }
+
+    function isCurrentUserAdmin(session) {
+      return Boolean(currentUser?.uid && session.adminUid && currentUser.uid === session.adminUid);
+    }
+
+    function canCurrentUserSetAdmin(session) {
+      return session.status !== "finished" && (isCurrentUserAdmin(session) || !session.adminUid);
     }
 
     function syncTimerStateOnLoad() {
@@ -1109,6 +1250,10 @@
       if (session.status !== "not_started") {
         return;
       }
+      if (!isCurrentUserAdmin(session)) {
+        announce("Seul l'admin peut demarrer.");
+        return;
+      }
 
       session.status = "running";
       session.isPaused = false;
@@ -1128,6 +1273,10 @@
       if (session.status !== "running" || session.isPaused || !session.runStartedAtMs) {
         return;
       }
+      if (!isCurrentUserAdmin(session)) {
+        announce("Seul l'admin peut mettre en pause.");
+        return;
+      }
 
       session.elapsedMs += Date.now() - session.runStartedAtMs;
       session.runStartedAtMs = null;
@@ -1142,6 +1291,10 @@
     function resumeSession() {
       const session = getCurrentSession();
       if (session.status !== "running" || !session.isPaused) {
+        return;
+      }
+      if (!isCurrentUserAdmin(session)) {
+        announce("Seul l'admin peut reprendre.");
         return;
       }
 
@@ -1162,6 +1315,10 @@
     function finishSession(endReason) {
       const session = getCurrentSession();
       if (session.status === "finished") {
+        return;
+      }
+      if (endReason === "manual_stop" && !isCurrentUserAdmin(session)) {
+        announce("Seul l'admin peut arreter manuellement.");
         return;
       }
 
@@ -1211,6 +1368,9 @@
     function incrementOkCount() {
       const session = getCurrentSession();
       if (!canCountOk(session)) {
+        if (!isCurrentUserAdmin(session) && session.status === "running") {
+          announce("Seul l'admin peut compter les OK.");
+        }
         return;
       }
 
@@ -1251,6 +1411,10 @@
         announce("Les paris sont fermes.");
         return;
       }
+      if (!currentUser?.uid) {
+        announce("Connexion en cours, reessayez.");
+        return;
+      }
 
       const name = elements.participantName.value.trim();
       const guess = Number(elements.participantGuess.value);
@@ -1267,29 +1431,25 @@
         return;
       }
 
-      const duplicate = session.participants.some(
-        (participant) => participant.name.toLowerCase() === name.toLowerCase(),
-      );
-
-      if (duplicate) {
-        announce("Ce nom existe deja dans la session.");
-        elements.participantName.focus();
-        return;
-      }
-
       registerParticipantName(name);
-      session.participants.push({ name, guess });
+      const existingByUser = session.participants.find((participant) => participant.uid === currentUser.uid);
+      if (existingByUser) {
+        existingByUser.name = name;
+        existingByUser.guess = guess;
+      } else {
+        session.participants.push({ uid: currentUser.uid, name, guess });
+      }
       session.potCents = getDynamicPotCents(session);
       session.events.push({
         t: getEventTimestampSeconds(session),
         type: "add_participant",
-        payload: { name, guess },
+        payload: { uid: currentUser.uid, name, guess },
       });
 
       elements.participantForm.reset();
       elements.participantName.focus();
       persistState();
-      announce(`Participant ajoute: ${name}.`);
+      announce(existingByUser ? `Pari mis a jour: ${name}.` : `Participant ajoute: ${name}.`);
       render();
     }
 
@@ -1358,17 +1518,74 @@
       render();
     }
 
-    function removeParticipant(name) {
+    function claimAdmin() {
+      const session = getCurrentSession();
+      if (session.status === "finished") {
+        return;
+      }
+      if (!currentUser?.uid) {
+        announce("Connexion en cours, reessayez.");
+        return;
+      }
+
+      const currentParticipant = session.participants.find((participant) => participant.uid === currentUser.uid);
+      if (!currentParticipant) {
+        announce("Ajoute d'abord ta mise pour etre admin.");
+        return;
+      }
+
+      if (!canCurrentUserSetAdmin(session)) {
+        announce("Seul l'admin actuel peut changer d'admin.");
+        return;
+      }
+
+      setSessionAdmin(currentParticipant.uid, currentParticipant.name);
+    }
+
+    function setSessionAdmin(uid, name) {
+      const session = getCurrentSession();
+      const participant = session.participants.find((entry) => entry.uid === uid);
+      if (!participant) {
+        announce("Ce participant n'est pas dans la session.");
+        return;
+      }
+      if (!canCurrentUserSetAdmin(session)) {
+        announce("Seul l'admin actuel peut changer d'admin.");
+        return;
+      }
+
+      session.adminUid = participant.uid;
+      session.adminName = participant.name || name;
+      persistState();
+      announce(`Admin defini: ${session.adminName}.`);
+      render();
+    }
+
+    function removeParticipant(uid) {
       const session = getCurrentSession();
       if (!canEditParticipants(session)) {
         return;
       }
+      if (!currentUser?.uid) {
+        return;
+      }
+      if (!isCurrentUserAdmin(session) && uid !== currentUser.uid) {
+        announce("Tu peux seulement supprimer ta propre mise.");
+        return;
+      }
 
-      session.participants = session.participants.filter((participant) => participant.name !== name);
+      const removed = session.participants.find((participant) => participant.uid === uid);
+      session.participants = session.participants.filter((participant) => participant.uid !== uid);
       session.potCents = getDynamicPotCents(session);
+      if (session.adminUid === uid) {
+        session.adminUid = null;
+        session.adminName = null;
+      }
 
       persistState();
-      announce(`Participant supprime: ${name}.`);
+      if (removed) {
+        announce(`Participant supprime: ${removed.name}.`);
+      }
       render();
     }
 
@@ -1376,6 +1593,10 @@
       const current = getCurrentSession();
       if (current.status !== "finished") {
         announce("Terminez d'abord la session actuelle.");
+        return;
+      }
+      if (current.adminUid && !isCurrentUserAdmin(current)) {
+        announce("Seul l'admin de la session terminee peut en creer une nouvelle.");
         return;
       }
 
@@ -1387,6 +1608,12 @@
     }
 
     function resetAllData() {
+      const current = getCurrentSession();
+      if (current.adminUid && !isCurrentUserAdmin(current)) {
+        announce("Seul l'admin peut reinitialiser.");
+        return;
+      }
+
       const confirmed = window.confirm(
         "Effacer toutes les sessions, la cagnote reportee et l'historique local ?",
       );
@@ -1462,11 +1689,16 @@
       const { label, badgeClass } = getStatusPresentation(session);
       elements.sessionStatusBadge.textContent = label;
       elements.sessionStatusBadge.className = `badge ${badgeClass}`;
-      elements.sessionDate.textContent = formatDateTime(session.dateISO);
+      const adminLabel = session.adminName ? `Admin: ${session.adminName}` : "Admin non defini";
+      const meLabel = currentUser?.uid ? `Toi: ${currentUser.uid.slice(0, 6)}` : "Connexion...";
+      const syncLabel = firebaseReady ? (remoteLoading ? "Synchro..." : "Live") : "Local";
+      elements.sessionDate.textContent = `${formatDateTime(session.dateISO)} | ${adminLabel} | ${meLabel} | ${syncLabel}`;
       elements.newSessionBtn.disabled = session.status !== "finished";
+      elements.claimAdminBtn.disabled = !canCurrentUserSetAdmin(session);
     }
 
     function renderTimer(session) {
+      const isAdmin = isCurrentUserAdmin(session);
       elements.timerDisplay.textContent = formatTimer(getDisplayRemainingSeconds(session));
 
       if (session.status === "finished") {
@@ -1477,13 +1709,15 @@
       } else if (session.status === "running") {
         elements.timerMeta.textContent = "Le compteur tourne. Stop termine la session immediatement.";
       } else {
-        elements.timerMeta.textContent = "Ajoutez des participants avant ou pendant le cours, puis demarrez le timer.";
+        elements.timerMeta.textContent = session.adminUid
+          ? "Ajoutez des participants avant ou pendant le cours, puis l'admin demarre le timer."
+          : "Ajoutez des participants puis definissez un admin pour demarrer.";
       }
 
-      elements.startBtn.disabled = session.status !== "not_started";
-      elements.pauseBtn.disabled = !(session.status === "running" && !session.isPaused);
-      elements.resumeBtn.disabled = !(session.status === "running" && session.isPaused);
-      elements.stopBtn.disabled = session.status !== "running";
+      elements.startBtn.disabled = !(session.status === "not_started" && isAdmin);
+      elements.pauseBtn.disabled = !(session.status === "running" && !session.isPaused && isAdmin);
+      elements.resumeBtn.disabled = !(session.status === "running" && session.isPaused && isAdmin);
+      elements.stopBtn.disabled = !(session.status === "running" && isAdmin);
     }
 
     function renderCounter(session) {
@@ -1535,6 +1769,8 @@
     }
     function renderParticipants(session) {
       const betsOpen = canEditParticipants(session);
+      const canSetAdmin = canCurrentUserSetAdmin(session);
+      const isAdmin = isCurrentUserAdmin(session);
 
       elements.bettingStatus.textContent = betsOpen ? "Paris ouverts" : "Paris fermes";
       elements.participantName.disabled = !betsOpen;
@@ -1554,25 +1790,42 @@
         .map(
           (participant) => `
             <tr>
-              <td>${escapeHtml(participant.name)}</td>
+              <td>${escapeHtml(participant.name)}${participant.uid === currentUser?.uid ? " (toi)" : ""}${participant.uid === session.adminUid ? " (admin)" : ""}</td>
               <td>${participant.guess}</td>
               <td>
-                <button
-                  type="button"
-                  class="inline-delete"
-                  data-remove-name="${escapeAttribute(participant.name)}"
-                  ${betsOpen ? "" : "disabled"}
-                >
-                  Supprimer
-                </button>
+                <div class="button-row">
+                  <button
+                    type="button"
+                    class="inline-delete"
+                    data-remove-uid="${escapeAttribute(participant.uid || "")}"
+                    ${(betsOpen && (participant.uid === currentUser?.uid || isAdmin)) ? "" : "disabled"}
+                  >
+                    Supprimer
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-secondary"
+                    data-admin-uid="${escapeAttribute(participant.uid || "")}"
+                    data-admin-name="${escapeAttribute(participant.name)}"
+                    ${(canSetAdmin && participant.uid) ? "" : "disabled"}
+                  >
+                    Definir admin
+                  </button>
+                </div>
               </td>
             </tr>
           `,
         )
         .join("");
 
-      elements.participantsBody.querySelectorAll("[data-remove-name]").forEach((button) => {
-        button.addEventListener("click", () => removeParticipant(button.dataset.removeName));
+      elements.participantsBody.querySelectorAll("[data-remove-uid]").forEach((button) => {
+        button.addEventListener("click", () => removeParticipant(button.dataset.removeUid));
+      });
+
+      elements.participantsBody.querySelectorAll("[data-admin-uid]").forEach((button) => {
+        button.addEventListener("click", () => {
+          setSessionAdmin(button.dataset.adminUid, button.dataset.adminName);
+        });
       });
     }
 
