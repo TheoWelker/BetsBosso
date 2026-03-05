@@ -958,7 +958,7 @@
             <h2>Participants et paris</h2>
             <span id="betting-status" class="muted"></span>
           </div>
-          <p class="participants-intro">Enregistre ta mise, choisis un admin unique pour cette session, puis l'admin pilote le compteur.</p>
+          <p class="participants-intro">Enregistre ta mise, choisis un ou plusieurs admins pour cette session, puis les admins pilotent le timer.</p>
           <div class="enrollment-shell">
             <div class="participants-block">
               <h3>Ma mise</h3>
@@ -977,15 +977,15 @@
               </form>
             </div>
             <div class="admin-panel">
-              <h3>Admin de la session</h3>
-              <p class="muted">Un seul admin. Il demarre/stop le timer et compte les "OK".</p>
+              <h3>Admins de la session</h3>
+              <p class="muted">Plusieurs admins possibles. Ils demarrent/stop le timer et peuvent gerer la session.</p>
               <label>
                 <span>Choisir un participant</span>
                 <select id="admin-select"></select>
               </label>
               <div class="button-row">
-                <button id="set-admin-btn" type="button" class="btn btn-secondary">Definir admin</button>
-                <button id="claim-admin-btn" type="button" class="btn btn-secondary">Me definir admin</button>
+                <button id="set-admin-btn" type="button" class="btn btn-secondary">Ajouter admin</button>
+                <button id="claim-admin-btn" type="button" class="btn btn-secondary">Me mettre admin</button>
               </div>
             </div>
           </div>
@@ -1546,6 +1546,20 @@
             }))
             .filter((item) => item.name)
         : [];
+      const admins = Array.isArray(session.admins)
+        ? session.admins
+            .map((admin) => ({
+              uid: String(admin?.uid || ""),
+              name: String(admin?.name || "").trim(),
+            }))
+            .filter((admin) => admin.uid)
+        : [];
+      if (!admins.length && session.adminUid) {
+        admins.push({
+          uid: String(session.adminUid),
+          name: String(session.adminName || "").trim(),
+        });
+      }
 
       const status = ["not_started", "running", "finished"].includes(session.status) ? session.status : "not_started";
       const durationSeconds = Number.isFinite(session.durationSeconds)
@@ -1584,6 +1598,7 @@
         isPaused: Boolean(session.isPaused),
         finalElapsedMs: Number.isFinite(session.finalElapsedMs) ? Math.max(0, Math.trunc(session.finalElapsedMs)) : null,
         finishedAtISO: session.finishedAtISO ? String(session.finishedAtISO) : null,
+        admins,
         adminUid: session.adminUid ? String(session.adminUid) : null,
         adminName: session.adminName ? String(session.adminName) : null,
       };
@@ -1617,6 +1632,7 @@
         isPaused: false,
         finalElapsedMs: null,
         finishedAtISO: null,
+        admins: [],
         adminUid: null,
         adminName: null,
       };
@@ -1634,6 +1650,10 @@
         if (!Array.isArray(session.counters)) {
           session.counters = [];
         }
+        if (!Array.isArray(session.admins)) {
+          session.admins = [];
+        }
+        syncLegacyAdminFields(session);
         syncSessionOkCountFromCounters(session);
         session.baseCarryPotCents = carry;
         session.potCents = session.baseCarryPotCents + session.participants.length * PARTICIPATION_FEE_CENTS;
@@ -1754,14 +1774,33 @@
       session.okCount = stats.roundedAverage;
     }
 
+    function getSessionAdmins(session) {
+      return Array.isArray(session.admins) ? session.admins : [];
+    }
+
+    function syncLegacyAdminFields(session) {
+      const firstAdmin = getSessionAdmins(session)[0] || null;
+      session.adminUid = firstAdmin ? firstAdmin.uid : null;
+      session.adminName = firstAdmin ? firstAdmin.name : null;
+    }
+
+    function getAdminNames(session) {
+      return getSessionAdmins(session).map((admin) => admin.name || `User ${admin.uid.slice(0, 6)}`);
+    }
+
+    function isSessionAdminUid(session, uid) {
+      return Boolean(uid && getSessionAdmins(session).some((admin) => admin.uid === uid));
+    }
+
     function getCounterDisplayName(session, uid, fallbackName = "") {
       const participant = session.participants.find((entry) => entry.uid === uid);
       if (participant?.name) {
         return participant.name;
       }
 
-      if (session.adminUid === uid && session.adminName) {
-        return session.adminName;
+      const admin = getSessionAdmins(session).find((entry) => entry.uid === uid);
+      if (admin?.name) {
+        return admin.name;
       }
 
       const fromCounter = session.counters.find((entry) => entry.uid === uid);
@@ -1801,11 +1840,11 @@
     }
 
     function isCurrentUserAdmin(session) {
-      return Boolean(currentUser?.uid && session.adminUid && currentUser.uid === session.adminUid);
+      return Boolean(currentUser?.uid && isSessionAdminUid(session, currentUser.uid));
     }
 
     function canCurrentUserSetAdmin(session) {
-      return session.status === "not_started" && (isCurrentUserAdmin(session) || !session.adminUid);
+      return session.status === "not_started" && (isCurrentUserAdmin(session) || getSessionAdmins(session).length === 0);
     }
 
     function syncTimerStateOnLoad() {
@@ -1847,7 +1886,7 @@
         return;
       }
       if (!isCurrentUserAdmin(session)) {
-        announce("Seul l'admin peut demarrer.");
+        announce("Seul un admin peut demarrer.");
         return;
       }
 
@@ -1855,12 +1894,12 @@
       session.isPaused = false;
       session.runStartedAtMs = Date.now();
       session.elapsedMs = 0;
-      if (!session.counters.length && session.adminUid) {
-        session.counters.push({
-          uid: session.adminUid,
-          name: getCounterDisplayName(session, session.adminUid, session.adminName || ""),
+      if (!session.counters.length && getSessionAdmins(session).length) {
+        session.counters = getSessionAdmins(session).map((admin) => ({
+          uid: admin.uid,
+          name: getCounterDisplayName(session, admin.uid, admin.name || ""),
           count: 0,
-        });
+        }));
       }
       syncSessionOkCountFromCounters(session);
       session.potCents = getDynamicPotCents(session);
@@ -1878,7 +1917,7 @@
         return;
       }
       if (!isCurrentUserAdmin(session)) {
-        announce("Seul l'admin peut mettre en pause.");
+        announce("Seul un admin peut mettre en pause.");
         return;
       }
 
@@ -1898,7 +1937,7 @@
         return;
       }
       if (!isCurrentUserAdmin(session)) {
-        announce("Seul l'admin peut reprendre.");
+        announce("Seul un admin peut reprendre.");
         return;
       }
 
@@ -1922,7 +1961,7 @@
         return;
       }
       if (endReason === "manual_stop" && !isCurrentUserAdmin(session)) {
-        announce("Seul l'admin peut arreter manuellement.");
+        announce("Seul un admin peut arreter manuellement.");
         return;
       }
 
@@ -2195,7 +2234,7 @@
       }
 
       if (!canCurrentUserSetAdmin(session)) {
-        announce("Seul l'admin actuel peut changer d'admin.");
+        announce("Seuls les admins actuels peuvent ajouter un admin.");
         return;
       }
 
@@ -2221,8 +2260,11 @@
 
     function setSessionAdmin(uid, name) {
       const session = getCurrentSession();
+      if (!Array.isArray(session.admins)) {
+        session.admins = [];
+      }
       if (session.status !== "not_started") {
-        announce("L'admin est fige des que la session a demarre.");
+        announce("Les admins sont figes des que la session a demarre.");
         return;
       }
       const participant = session.participants.find((entry) => entry.uid === uid);
@@ -2231,14 +2273,21 @@
         return;
       }
       if (!canCurrentUserSetAdmin(session)) {
-        announce("Seul l'admin actuel peut changer d'admin.");
+        announce("Seuls les admins actuels peuvent ajouter un admin.");
+        return;
+      }
+      if (isSessionAdminUid(session, participant.uid)) {
+        announce(`${participant.name} est deja admin.`);
         return;
       }
 
-      session.adminUid = participant.uid;
-      session.adminName = participant.name || name;
+      session.admins.push({
+        uid: participant.uid,
+        name: participant.name || name,
+      });
+      syncLegacyAdminFields(session);
       persistState();
-      announce(`Admin defini: ${session.adminName}.`);
+      announce(`Admin ajoute: ${participant.name || name}.`);
       render();
     }
 
@@ -2257,11 +2306,9 @@
 
       const removed = session.participants.find((participant) => participant.uid === uid);
       session.participants = session.participants.filter((participant) => participant.uid !== uid);
+      session.admins = getSessionAdmins(session).filter((admin) => admin.uid !== uid);
+      syncLegacyAdminFields(session);
       session.potCents = getDynamicPotCents(session);
-      if (session.adminUid === uid) {
-        session.adminUid = null;
-        session.adminName = null;
-      }
 
       persistState();
       if (removed) {
@@ -2276,8 +2323,8 @@
         announce("Terminez d'abord la session actuelle.");
         return;
       }
-      if (current.adminUid && !isCurrentUserAdmin(current)) {
-        announce("Seul l'admin de la session terminee peut en creer une nouvelle.");
+      if (getSessionAdmins(current).length && !isCurrentUserAdmin(current)) {
+        announce("Seul un admin de la session terminee peut en creer une nouvelle.");
         return;
       }
 
@@ -2306,8 +2353,8 @@
       }
 
       const current = getCurrentSession();
-      if (current.adminUid && !isCurrentUserAdmin(current)) {
-        announce("Seul l'admin actuel peut supprimer une session.");
+      if (getSessionAdmins(current).length && !isCurrentUserAdmin(current)) {
+        announce("Seul un admin actuel peut supprimer une session.");
         return;
       }
 
@@ -2337,8 +2384,8 @@
 
     function resetAllData() {
       const current = getCurrentSession();
-      if (current.adminUid && !isCurrentUserAdmin(current)) {
-        announce("Seul l'admin peut reinitialiser.");
+      if (getSessionAdmins(current).length && !isCurrentUserAdmin(current)) {
+        announce("Seul un admin peut reinitialiser.");
         return;
       }
 
@@ -2438,12 +2485,13 @@
       const { label, badgeClass } = getStatusPresentation(session);
       elements.sessionStatusBadge.textContent = label;
       elements.sessionStatusBadge.className = `badge ${badgeClass}`;
-      const adminLabel = session.adminName ? `Admin: ${session.adminName}` : "Admin non defini";
+      const adminNames = getAdminNames(session);
+      const adminLabel = adminNames.length ? `Admins: ${adminNames.join(", ")}` : "Aucun admin";
       const meLabel = currentUser?.uid ? `Toi: ${currentUser.uid.slice(0, 6)}` : "Connexion...";
       const syncLabel = firebaseReady ? (remoteLoading ? "Synchro..." : "Live") : "Local";
       elements.sessionDate.textContent = `${formatDateTime(session.dateISO)} | ${adminLabel} | ${meLabel} | ${syncLabel}`;
-      elements.newSessionBtn.disabled = session.status !== "finished" || (session.adminUid && !isCurrentUserAdmin(session));
-      elements.resetAllBtn.disabled = Boolean(session.adminUid && !isCurrentUserAdmin(session));
+      elements.newSessionBtn.disabled = session.status !== "finished" || (getSessionAdmins(session).length > 0 && !isCurrentUserAdmin(session));
+      elements.resetAllBtn.disabled = Boolean(getSessionAdmins(session).length > 0 && !isCurrentUserAdmin(session));
       elements.claimAdminBtn.disabled = !canCurrentUserSetAdmin(session);
     }
 
@@ -2459,9 +2507,9 @@
       } else if (session.status === "running") {
         elements.timerMeta.textContent = "Le compteur tourne. Stop termine la session immediatement.";
       } else {
-        elements.timerMeta.textContent = session.adminUid
-          ? "Ajoutez des participants avant ou pendant le cours, puis l'admin unique demarre le timer."
-          : "Nouvelle session: choisissez un admin unique (modifiable avant demarrage), puis demarrez.";
+        elements.timerMeta.textContent = getSessionAdmins(session).length
+          ? "Ajoutez des participants avant ou pendant le cours, puis un admin demarre le timer."
+          : "Nouvelle session: choisissez un ou plusieurs admins (modifiables avant demarrage), puis demarrez.";
       }
 
       elements.startBtn.disabled = !(session.status === "not_started" && isAdmin);
@@ -2550,9 +2598,10 @@
       const betsOpen = canEditParticipants(session);
       const canSetAdmin = canCurrentUserSetAdmin(session);
       const isAdmin = isCurrentUserAdmin(session);
-      const adminLabel = session.adminName ? session.adminName : "Aucun";
+      const adminNames = getAdminNames(session);
+      const adminLabel = adminNames.length ? adminNames.join(", ") : "Aucun";
 
-      elements.bettingStatus.textContent = `${betsOpen ? "Paris ouverts" : "Paris fermes"} | Admin unique: ${adminLabel}`;
+      elements.bettingStatus.textContent = `${betsOpen ? "Paris ouverts" : "Paris fermes"} | Admins: ${adminLabel}`;
       elements.participantName.disabled = !betsOpen;
       elements.participantGuess.disabled = !betsOpen;
       elements.participantForm.querySelector("button[type='submit']").disabled = !betsOpen;
@@ -2562,8 +2611,11 @@
       elements.adminSelect.innerHTML = [`<option value="">Choisir...</option>`]
         .concat(
           session.participants.map(
-            (participant) =>
-              `<option value="${escapeAttribute(participant.uid || "")}" ${participant.uid === session.adminUid ? "selected" : ""}>${escapeHtml(participant.name)}</option>`,
+            (participant) => {
+              const isParticipantAdmin = isSessionAdminUid(session, participant.uid);
+              const suffix = isParticipantAdmin ? " (admin)" : "";
+              return `<option value="${escapeAttribute(participant.uid || "")}">${escapeHtml(participant.name + suffix)}</option>`;
+            },
           ),
         )
         .join("");
@@ -2580,7 +2632,7 @@
       elements.participantsBody.innerHTML = session.participants
         .map(
           (participant) => {
-            const isParticipantAdmin = participant.uid === session.adminUid;
+            const isParticipantAdmin = isSessionAdminUid(session, participant.uid);
             const isMe = participant.uid === currentUser?.uid;
 
             return `
@@ -2963,7 +3015,7 @@
 
     function renderSettingsPanel() {
       const current = getCurrentSession();
-      const canManageSettings = !current.adminUid || isCurrentUserAdmin(current);
+      const canManageSettings = getSessionAdmins(current).length === 0 || isCurrentUserAdmin(current);
       elements.resetAllBtn.disabled = !canManageSettings;
 
       if (!state.sessions.length) {
